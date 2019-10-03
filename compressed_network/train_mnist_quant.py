@@ -103,52 +103,37 @@ tf.app.flags.DEFINE_float(
 
 FLAGS = tf.app.flags.FLAGS
 
-
-def configure_learning_rate(num_samples_per_epoch, global_step):
-    decay_steps = int(num_samples_per_epoch / FLAGS.batch_size *
-                      FLAGS.num_epochs_per_decay)
-
-    if FLAGS.learning_rate_decay_type == 'exponential':
-        return tf.train.exponential_decay(FLAGS.learning_rate,
-                                          global_step,
-                                          decay_steps,
-                                          FLAGS.learning_rate_decay_factor,
-                                          staircase=True,
-                                          name='exponential_decay_lr')
+lr = 0.001
 
 
-def configure_optimizer(learning_rate):
-    optimizer = tf.train.AdamOptimizer(
-        learning_rate,
-        beta1=FLAGS.adam_beta1,
-        beta2=FLAGS.adam_beta2,
-        epsilon=FLAGS.opt_epsilon)
-    # optimizer = tf.train.GradientDescentOptimizer(learning_rate)
-
-    return optimizer
-
-def gradients_cal(var_list, loss, lr, net):
-    vs.get_variable_scope().reuse_variables()
-    gradients_list = tf.gradients(xs=var_list, ys=loss)
-
-    masks = [net.c1.prune_mask, net.c2.prune_mask, net.fc3.prune_mask, None, None, None, None, None]
+def apply_gradients(eval_grad_list, var_list, lr):
     
     gradients_op_list = []
     gradients_mask_list = []
-    # lr * gradients
-    # gradients = [g for g in gradients_list]
 
     for i in range(len(var_list)):
-        # print('gradient', gradients_list[i])
-        # print('mask', masks[i])
-        # collect the gradients op
-        # apply mask
-        if masks[i] is not None:
-            gradients_mask = gradients_list[i] * lr * masks[i]
-            gradients_mask_list.append(gradients_mask)
-            new_var = tf.subtract(var_list[i], gradients_mask)
-        else:
-            new_var = tf.subtract(var_list[i], gradients_list[i] * lr)
+    #     if masks is not None:
+    #         if masks[i] is not None:
+    #             gradients_mask = eval_grad_list[i] * lr * masks[i]
+    #             gradients_mask_list.append(gradients_mask)
+    #             new_var = tf.subtract(var_list[i], gradients_mask)
+        # elif centroids is not None:
+        #     pass
+        #     # if centroids[i] is not None:
+            #     gradient_value = session.run(gradients_list[i])
+            #     clustered_gradient = np.digitize(gradient_value.flatten(), centroids[i])
+            #     clustered_gradients = np.reshape(clustered_gradients, gradients_list[i].shape)
+            #     gradient = np.zeros(gradient_values.shape)
+            #     for i in range(0, len(centroids[i])):
+            #         centroid_mask = np.copy(clustered_gradients)
+            #         centroid_mask[centroid_mask != self.centroids[i]] = 0
+            #         centroid_mask[centroid_mask == self.centroids[i]] = 1
+            #         gradient_sum = np.sum(gradient_values * centroid_mask)
+            #         gradient += centroid_mask * gradient_sum
+            #     new_var = tf.subtract(var_list[i], gradient)
+        # else:
+        new_var = tf.subtract(var_list[i], eval_grad_list[i] * lr)
+
         gradients_op = var_list[i].assign(new_var)
         gradients_op_list.append(gradients_op)
     
@@ -195,10 +180,8 @@ def main():
 
         images.set_shape([FLAGS.batch_size, 28, 28, 1])
 
-        labels -= FLAGS.labels_offset
-
         onehot_labels = tf.one_hot(
-            labels, num_classes - FLAGS.labels_offset)
+            labels, num_classes)
 
         summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
@@ -217,8 +200,8 @@ def main():
         summaries.add(tf.summary.scalar('loss/%s' %
                                         total_loss.op.name, total_loss))
 
-        streaming_accuracy = tf.contrib.metrics.accuracy(labels, predictions)
-        summaries.add(tf.summary.scalar('accuracy', streaming_accuracy))
+        acc_op, acc_update_op = tf.metrics.accuracy(labels=labels, predictions=predictions)
+        summaries.add(tf.summary.scalar('accuracy', acc_op))
 
         # for end_point in end_points:
         #     x = end_points[end_point]
@@ -232,22 +215,13 @@ def main():
         model_variables = tf.contrib.framework.get_model_variables()
 
         variables_to_train = tf.trainable_variables()
-        print(variables_to_train)
 
-        learning_rate = configure_learning_rate(num_samples, global_step)s
-        optimizer = configure_optimizer(learning_rate)
-        summaries.add(tf.summary.scalar('learning_rate', learning_rate))
+        # summaries.add(tf.summary.scalar('learning_rate', learning_rate))
 
-        # gradient_vars = optimizer.compute_gradients(
-        #     loss_op, variables_to_train)
+        vs.get_variable_scope().reuse_variables()
+        gradients_list = tf.gradients(xs=variables_to_train, ys=total_loss)
 
-        # gradients = [grad for grad, var in gradient_vars]
-
-        # train_step = optimizer.apply_gradients(
-        #     gradient_vars, global_step=global_step)
-
-        train_step, _ = gradients_cal(variables_to_train, total_loss, 0.03, quant_net)
-
+        # train_step, _ = apply_gradients(eval_grad_list, variables_to_train, lr)
         layers_to_compress = quant_net.layers_as_list()
 
         layers_to_compress_names = []
@@ -261,15 +235,19 @@ def main():
         #                                        save_summaries_steps=10) as mon_sess:
         with tf.Session() as mon_sess:
             mon_sess.run(tf.global_variables_initializer())
+            mon_sess.run(tf.local_variables_initializer())
 
-            for i in range(0, 100):
-                for j in range(0, 100):
+
+            for i in range(0, 10):
+                for j in range(0, 10):
+                    eval_grad = mon_sess.run(gradients_list)
+                    train_step, _ = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=0.03)
 
                     _, loss = mon_sess.run([train_step, total_loss])
 
                     print('loss', loss)
                     print(' ')
-                    print('accuracy', mon_sess.run(streaming_accuracy))
+                    print('accuracy', mon_sess.run([acc_op, acc_update_op]))
                     print(' ')
 
             saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'init_model.ckpt'))
