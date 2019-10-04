@@ -1,43 +1,34 @@
-import numpy as np
-import tensorflow as tf
 import sys
 sys.path.append('./../')
+import os
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.python.ops import variable_scope
 
 from layers.conv_layer import conv2d
 from layers import dense_layer
 
-
 from models.mnist_quant import CNN
 from models.mnist_plain import mnist_plain
 
-from datasets.dataset_factory import get_dataset\
+from utils.prune_utils import increase_sparsity_level
 
-import os
+from datasets.dataset_factory import get_dataset
+from preprocessing import preprocessing_factory
 
-from tensorflow.python.ops import variable_scope as vs
-
-
-#######################
+#################
 # Dataset Flags #
-#######################
+#################
 
 tf.app.flags.DEFINE_string(
-    'dataset_name', 'flowers', 'The name of the dataset to load.')
+    'dataset_name', 'fashion_mnist', 'The name of the dataset to load.')
 
 tf.app.flags.DEFINE_string(
     'dataset_split_name', 'train', 'The name of the train/test split.')
 
 tf.app.flags.DEFINE_string(
-    'dataset_dir', './../tmp/flowers', 'The directory where the dataset files are stored.')
-
-tf.app.flags.DEFINE_integer(
-    'labels_offset', 0,
-    'An offset for the labels in the dataset. This flag is primarily used to '
-    'evaluate the VGG and ResNet architectures which do not use a background '
-    'class for the ImageNet dataset.')
-
-tf.app.flags.DEFINE_integer(
-    'batch_size', 16, 'The number of samples in each batch.')
+    'dataset_dir', './../../tmp/mnist_fashion', 'The directory where the dataset files are stored.')
 
 tf.app.flags.DEFINE_string(
     'preprocessing_name', None, 'The name of the preprocessing to use. If left '
@@ -46,12 +37,16 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_integer(
     'train_image_size', 28, 'Train image size')
 
-tf.app.flags.DEFINE_string('checkpoint_dir', '../mnist_q_4e_0.001_pruned',
+##################
+# Training Flags #
+##################
+
+tf.app.flags.DEFINE_string('checkpoint_dir', '/media/oanaucs/Data/awp_trained_models/mnist',
                            'Directory for saving and restoring checkpoints.')
 
-#######################
-# Training Flags #
-#######################
+tf.app.flags.DEFINE_integer(
+    'batch_size', 128, 'The number of samples in each batch.')
+    
 tf.app.flags.DEFINE_integer(
     'num_epochs', 1,
     'Maximum number of epochs.')
@@ -69,21 +64,20 @@ tf.app.flags.DEFINE_float(
 
 tf.app.flags.DEFINE_float('opt_epsilon', 1.0, 'Epsilon term for the optimizer.')
 
-
 #######################
 # Learning Rate Flags #
 #######################
 
 tf.app.flags.DEFINE_string(
     'learning_rate_decay_type',
-    'exponential',
+    'linear',
     'Specifies how the learning rate is decayed. One of "fixed", "exponential",'
     ' or "polynomial"')
 
-tf.app.flags.DEFINE_float('learning_rate', 0.001, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 0.003, 'Initial learning rate.')
 
 tf.app.flags.DEFINE_float(
-    'end_learning_rate', 0.0001,
+    'end_learning_rate', 0.0003,
     'The minimal end learning rate used by a polynomial decay learning rate.')
 
 tf.app.flags.DEFINE_float(
@@ -93,7 +87,7 @@ tf.app.flags.DEFINE_float(
     'learning_rate_decay_factor', 0.94, 'Learning rate decay factor.')
 
 tf.app.flags.DEFINE_float(
-    'num_epochs_per_decay', 2.0,
+    'num_epochs_per_decay', 1,
     'Number of epochs after which learning rate decays.')
 
 tf.app.flags.DEFINE_float(
@@ -101,36 +95,104 @@ tf.app.flags.DEFINE_float(
     'The decay to use for the moving average.'
     'If left as None, then moving averages are not used.')
 
+#################
+# Pruning Flags #
+#################
+
+tf.app.flags.DEFINE_integer(
+    'num_pruning_steps', 10,
+    'Number of pruning steps.')
+
+tf.app.flags.DEFINE_integer(
+    'num_pruning_retrain_steps', 10,
+    'Number of retrain steps after_pruning.')
+
+tf.app.flags.DEFINE_integer(
+    'pruning_threshold', None,
+    'Pruning threshold. If set to None, adaptive sparsity level will be used.')
+
+tf.app.flags.DEFINE_float(
+    'init_sparsity_level', 0.2,
+    'Initial sparsity level.')
+
+tf.app.flags.DEFINE_float(
+    'max_sparsity_level', 0.3,
+    'Maximum sparsity level. Depending on the number of steps can be achieved or not')
+
+tf.app.flags.DEFINE_float(
+    'sparsity_increase_step', 0.002,
+    'Step for increasing the sparsity level after the num_steps_sparsity_increase.')
+
+######################
+# Quantization Flags #
+######################
+
+tf.app.flags.DEFINE_integer(
+    'num_quant_clusters', 64,
+    'Number of quantization steps.')
+
+tf.app.flags.DEFINE_integer(
+    'num_quant_steps', 5,
+    'Number of quantization steps.')
+
+tf.app.flags.DEFINE_integer(
+    'num_quant_retrain_steps', 10,
+    'Number of steps for retraining after quantization.')
+
 FLAGS = tf.app.flags.FLAGS
 
-lr = 0.001
+def configure_learning_rate(num_samples_per_epoch, global_step):
+    decay_steps = int(num_samples_per_epoch / FLAGS.batch_size *
+                      FLAGS.num_epochs_per_decay)
+
+    if FLAGS.learning_rate_decay_type == 'exponential':
+        return tf.train.exponential_decay(FLAGS.learning_rate,
+                                          global_step,
+                                          decay_steps,
+                                          FLAGS.learning_rate_decay_factor,
+                                          staircase=True,
+                                          name='exponential_decay_lr')
+    elif FLAGS.learning_rate_decay_type == 'linear':
+        return tf.train.polynomial_decay(FLAGS.learning_rate,
+                                         global_step,
+                                         decay_steps,
+                                         end_learning_rate=FLAGS.end_learning_rate,
+                                         power=1.0,
+                                         cycle=False,
+                                         name=None)
 
 
 def apply_gradients(eval_grad_list, var_list, lr): 
     gradients_op_list = []
-    gradients_mask_list = []
 
     for i in range(len(var_list)):
-        new_var = tf.subtract(var_list[i], eval_grad_list[i] * lr)
+        updated_weights = tf.subtract(var_list[i], eval_grad_list[i] * lr)
 
-        gradients_op = var_list[i].assign(new_var)
+        gradients_op = var_list[i].assign(updated_weights)
         gradients_op_list.append(gradients_op)
     
-    return gradients_op_list, gradients_mask_list
+    return gradients_op_list
 
 
 def main():
     tf.logging.set_verbosity(tf.logging.INFO)
     g = tf.Graph()
-    profiler = tf.profiler.Profiler(g)
     with g.as_default():
-        run_meta = tf.RunMetadata()
         config = tf.ConfigProto()
-        # config.gpu_options.allow_growth = True
         config.gpu_options.per_process_gpu_memory_fraction = 0.7
 
         # Create global_step
         global_step = tf.train.create_global_step()
+        global_step_count = 0
+        # create summary writer
+        summary_writer = tf.contrib.summary.create_file_writer(FLAGS.checkpoint_dir, flush_millis=10000)
+
+        #####################################
+        # Select the preprocessing function #
+        #####################################
+        image_preprocessing_fn = preprocessing_factory.get_preprocessing(
+            'lenet',
+            is_training=True)
 
         ######################
         # Select the dataset #
@@ -144,6 +206,9 @@ def main():
 
         num_steps = int(num_samples / FLAGS.batch_size)
 
+        dataset = dataset.map(lambda image, label: (image_preprocessing_fn(
+            image, FLAGS.train_image_size, FLAGS.train_image_size), label))
+
         dataset = dataset.repeat(FLAGS.num_epochs).shuffle(True).batch(FLAGS.batch_size)
 
         #########################
@@ -155,62 +220,62 @@ def main():
 
         [images, labels] = iterator.get_next()
 
-        images = tf.div(images, np.float32(255))
-
-        images.set_shape([FLAGS.batch_size, 28, 28, 1])
+        summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
+        summaries.add(tf.summary.image('image', images))
 
         onehot_labels = tf.one_hot(
             labels, num_classes)
 
-        summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
+        ######################
+        # Create the network #
+        ######################
+        net = CNN(FLAGS.batch_size, num_classes)
+        logits, predictions = net.train(images)
 
-        summaries.add(tf.summary.image('image', images))
+        # list of layers to compress
+        layers_to_compress = net.layers_to_compress()
 
-        quant_net = CNN(FLAGS.batch_size, num_classes)
-        logits, predictions = quant_net.train(images)
-
+        # create loss
         loss_op = tf.reduce_mean(tf.losses.softmax_cross_entropy(
             onehot_labels=onehot_labels, logits=logits, label_smoothing=FLAGS.label_smoothing, weights=1.0))
-
-        # Gather initial summaries.
-
         total_loss = tf.losses.get_total_loss()
 
         summaries.add(tf.summary.scalar('loss/%s' %
                                         total_loss.op.name, total_loss))
 
+        # define learning rate
+        learning_rate = configure_learning_rate(num_samples, tf.train.get_global_step())
+        summaries.add(tf.summary.scalar('learning_rate', learning_rate))
+
+        # define accuracy 
         acc_op, acc_update_op = tf.metrics.accuracy(labels=labels, predictions=predictions)
+
+        # gather summaries
         summaries.add(tf.summary.scalar('accuracy', acc_op))
 
-        # for end_point in end_points:
-        #     x = end_points[end_point]
-        # summaries.add(tf.summary.histogram('activations/' + end_point, x))
-        #     summaries.add(tf.summary.scalar('sparsity/' + end_point,
-        #                                   tf.nn.zero_fraction(x)))
+        for layer in layers_to_compress:
+            summaries.add(tf.summary.histogram('activations/' + layer.name, layer.weights))
+            summaries.add(tf.summary.scalar('sparsity/' + layer.name,
+                tf.nn.zero_fraction(layer.weights)))
 
-        # for variable in tf.contrib.framework.get_model_variables():
-        #     summaries.add(tf.summary.histogram(variable.op.name, variable))
+        # merge summaries
+        merged_summary_op = tf.summary.merge_all()
 
-        model_variables = tf.contrib.framework.get_model_variables()
-
+        #######################
+        # Define backprop ops #
+        #######################
         variables_to_train = tf.trainable_variables()
-
-        # summaries.add(tf.summary.scalar('learning_rate', learning_rate))
-
-        vs.get_variable_scope().reuse_variables()
+        # allow variable reuse
+        variable_scope.get_variable_scope().reuse_variables()
+        # gradient computation op
         gradients_list = tf.gradients(xs=variables_to_train, ys=total_loss)
 
-        # train_step, _ = apply_gradients(eval_grad_list, variables_to_train, lr)
-        layers_to_compress = quant_net.layers_as_list()
-
-        layers_to_compress_names = []
-        for layer in layers_to_compress:
-            layers_to_compress_names.append(layer.name)
-
-        saver = tf.train.Saver()
+        ################
+        # Create saver #
+        ################
+        saver = tf.train.Saver(variables_to_train)
+        writer = tf.summary.FileWriter(FLAGS.checkpoint_dir, tf.get_default_graph())
         last_ckpt = tf.train.latest_checkpoint(FLAGS.checkpoint_dir)
-
-        print('last checkpoint', last_ckpt)
 
         with tf.Session() as mon_sess:
             mon_sess.run(tf.global_variables_initializer())
@@ -218,101 +283,136 @@ def main():
 
             if last_ckpt is not None:
                 saver.restore(mon_sess, last_ckpt)
+                # get global step
+                global_step_count = int(last_ckpt.split('-')[-1])
+                mon_sess.run(global_step.assign(global_step_count))
 
-            # for epoch in range(0, 10):
-            #     for step in range(0, 10):
+            ####################
+            # INITIAL TRAINING #
+            # ####################
+
+            # for epoch in range(0, FLAGS.num_epochs):
+            #     for step in range(0, num_steps):
             #         # run gradients
             #         eval_grad = mon_sess.run(gradients_list)
-            #         # compute learning rate
-            #         current_lr = FLAGS.learning_rate*0.9**(num_epoch/50)
-            #         train_step, _ = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=current_lr)
+            #         # update weights
+            #         train_step = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=mon_sess.run(learning_rate))
+            #         # update global_step
+            #         global_step_count += 1
+            #         mon_sess.run(global_step.assign(global_step_count))
+            #         # compute loss and accuracy
+            #         _, loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
+            #         accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
-            #         _, loss = mon_sess.run([train_step, total_loss])
+            #         print('training loss', loss, 'accuracy', accuracy)
 
-            #         print('loss', loss)
-            #         print(' ')
-            #         print('accuracy', mon_sess.run([acc_op, acc_update_op]))
-            #         print(' ')
+            #         # save intermediate model
+            #         if (step % 20 == 0):
+            #             writer.add_summary(summary, mon_sess.run(global_step))
+            #             saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'model.ckpt-' + str(mon_sess.run(global_step))))
+                        
+            # # save final model
+            # saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'init_model.ckpt'))
 
-            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'init_model.ckpt'))
-
-            # saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
-            
-            # # # ###########
-            # # # PRUNE #
-            # for i in range(0, 2):
+            #########
+            # PRUNE #
+            #########
+            # for prune_step in range(0, FLAGS.num_pruning_steps):
+            #     # restore saved model
+            #     saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+            #     # compute current threshold or sparsity level
+            #     current_sparsity_level = FLAGS.init_sparsity_level
+            #     if FLAGS.pruning_threshold is None:
+            #         if (prune_step > 0):
+            #             current_sparsity_level = increase_sparsity_level(current_sparsity_level, FLAGS.max_sparsity_level, FLAGS.sparsity_increase_step)
+                
+            #     # quantize layers
             #     for layer in layers_to_compress:
-            #         layer.prune_weights(mon_sess)
+            #         layer.prune_weights(mon_sess, FLAGS.pruning_threshold, current_sparsity_level)
 
             #     # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
             #     # print('last c1 values', last_c1_values)
 
+            #     # save current weights
             #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
-
+            #     # restore for retraining
             #     saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
 
-            #     new_values = mon_sess.run(layers_to_compress[0].weights)
+            #     # new_values = mon_sess.run(layers_to_compress[0].weights))
 
             #     # retrain
-            #     for step in range(0, 1):
+            #     for step in range(0, FLAGS.num_pruning_retrain_steps):
+            #         # run gradients
             #         eval_grad = mon_sess.run(gradients_list)
-            #         print(gradients_list)
             #         # prune gradients
-            #         eval_grad[0] = quant_net.c1.prune_gradients(eval_grad[0])
-            #         eval_grad[1] = quant_net.c2.prune_gradients(eval_grad[1])
-            #         eval_grad[2] = quant_net.fc3.prune_gradients(eval_grad[2])
+            #         eval_grad[0] = net.c1.prune_gradients(eval_grad[0])
+            #         eval_grad[1] = net.c2.prune_gradients(eval_grad[1])
+            #         eval_grad[2] = net.fc3.prune_gradients(eval_grad[2])
 
-            #         train_step, _ = apply_gradients(eval_grad, variables_to_train, 0.0003)
-            #         # print(gradients_list_op)
+            #         # update weights
+            #         train_step = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
+            #         # update global_step
+            #         global_step_count += 1
+            #         mon_sess.run(global_step.assign(global_step_count))
 
-            #         _, prune_loss = mon_sess.run([train_step, total_loss])
-            #         print('last prune loss', prune_loss)
-            #         print('accuracy', mon_sess.run([acc_op, acc_update_op]))
+            #         # compute loss
+            #         _, prune_loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
+            #         accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
+            #         print('prune loss', prune_loss, 'accuracy', accuracy)
 
             #         # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
             #         # print('last c1 values', last_c1_values)
-            
-            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
 
-            #     saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
-
+            #         # save pruned model
+            #         if (prune_step % 50 == 0):
+            #             writer.add_summary(summary, mon_sess.run(global_step))
+            #             saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(current_sparsity_level) + '_pruned_model.ckpt-' + str(mon_sess.run(global_step))))
+                    
+            ############
+            # QUANTIZE #
+            ############
+            for quant_step in range(0, FLAGS.num_quant_steps):
+                # restore model model
+                saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
                 
-            # # ############
-            # # # QUANTIZE #
-            for i in range(0, 1):
                 for layer in layers_to_compress:
-                    layer.quantize_weights(mon_sess)
+                    layer.quantize_weights(mon_sess, FLAGS.num_quant_clusters)
 
                 # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
                 # print('last c1 values', last_c1_values)
 
+                # save weights
                 saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
-
+                # restore for retraining
                 saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
 
                 # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
                 # print('last c1 values', last_c1_values)
 
-                for step in range(0, 10):
+                for step in range(0, FLAGS.num_quant_retrain_steps):
+                    # get gradients
                     eval_grad = mon_sess.run(gradients_list)
-                    # print(gradients_list)
-                    # prune gradients
-                    eval_grad[0] = quant_net.c1.quantize_gradients(eval_grad[0])
-                    eval_grad[1] = quant_net.c2.quantize_gradients(eval_grad[1])
-                    eval_grad[2] = quant_net.fc3.quantize_gradients(eval_grad[2])
+                    # quantize gradients
+                    eval_grad[0] = net.c1.quantize_gradients(eval_grad[0])
+                    eval_grad[1] = net.c2.quantize_gradients(eval_grad[1])
+                    eval_grad[2] = net.fc3.quantize_gradients(eval_grad[2])
 
+                    # update weights
+                    train_step = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
+                    # update global_step
+                    global_step_count += 1
+                    mon_sess.run(global_step.assign(global_step_count))
 
-                    train_step, _ = apply_gradients(eval_grad, variables_to_train, 0.000003)
+                    # compute loss and accuracy
+                    _, quant_loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
+                    accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
-                    _, quant_loss = mon_sess.run([train_step, total_loss])
-                    print('last quant loss', quant_loss)
-                    print('accuracy', mon_sess.run([acc_op, acc_update_op]))
-            
-                saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
-
-                saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
-
+                    print('quant loss', quant_loss, 'accuracy', accuracy)
+                
+                if (quant_step % 10 == 0):
+                    writer.add_summary(summary, mon_sess.run(global_step))
+                    saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(quant_step) + '_quant_model.ckpt-' + str(mon_sess.run(global_step))))
 
 
 if __name__ == '__main__':

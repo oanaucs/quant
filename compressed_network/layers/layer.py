@@ -14,9 +14,7 @@ class layer_base(ABC):
                  init_bias_weights=None,
                  padding='SAME',
                  name=None,
-                 reuse=None,
-                 num_clusters=64,
-                 pruning_threshold=-0.05):
+                 reuse=None):
         self.name = name
         self.kernel_size = [kernel_size[0],
                             kernel_size[1], in_depth, out_depth]
@@ -27,10 +25,8 @@ class layer_base(ABC):
         self.bias_weights = None
         self.values = None
         self.prune_mask = None
-        self.pruning_threshold = pruning_threshold
         self.strides = strides
         self.padding = padding
-        self.num_clusters = num_clusters
         self.centroids = []
 
         self.pruned_weights = tf.placeholder(
@@ -56,25 +52,36 @@ class layer_base(ABC):
         self.values = None
         return self.values
 
-    def prune_weights(self, session):
+    def refine_threshold(self, weights, sparsity_level):
+        sorted_weights = np.sort(weights.flatten())
+        threshold_idx = int(sparsity_level * weights.size)
+        print('size', sorted_weights.size, 'threshold idx', threshold_idx, 'value', sorted_weights[threshold_idx], 'min', np.min(weights))
+        return sorted_weights[threshold_idx]
+
+    def prune_weights(self, session, pruning_threshold=None, sparsity_level=0.0):
         weight_values = np.asarray(session.run(self.weights))
+        
+        if pruning_threshold is None:
+            pruning_threshold = self.refine_threshold(weight_values, sparsity_level)
+
         self.prune_mask = np.copy(weight_values)
-        self.prune_mask[self.prune_mask < self.pruning_threshold] = 0
+        self.prune_mask[self.prune_mask < pruning_threshold] = 0
         self.prune_mask[self.prune_mask != 0] = 1
+        # assign values
         session.run(self.assign_op, feed_dict={
                     self.pruned_weights: weight_values * self.prune_mask})
 
     def prune_gradients(self, grad):
         return grad * self.prune_mask
 
-    def quantize_weights(self, session):
+    def quantize_weights(self, session, num_clusters):
         weight_values = session.run(self.weights)
 
         # assign to clusters
         self.centroids = np.linspace(
             start=np.min(weight_values), 
             stop=np.max(weight_values), 
-                num=self.num_clusters)
+                num=num_clusters)
 
         self.weight_clusters = np.digitize(
             weight_values.flatten(), self.centroids)

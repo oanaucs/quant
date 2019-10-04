@@ -13,32 +13,26 @@ class conv2d(layer_base):
                  strides=[1, 1, 1, 1],
                  padding='SAME',
                  name=None,
-                 reuse=None,
-                 num_clusters=64,
-                 pruning_threshold=-0.05):
+                 reuse=None):
         self.name = name
         self.kernel_size = [kernel_size[0],
                             kernel_size[1], in_depth, out_depth]
-        # self.weights = tf.Variable(tf.random_normal(
-        #     shape=self.kernel_size, stddev=0.1), 
-        #     name=self.name+'/weights', trainable=True)
         self.weights = tf.get_variable(name=self.name+'/weights',
             shape=self.kernel_size, dtype=tf.float32,
             initializer=tf.contrib.layers.xavier_initializer(),
             trainable=True)
         self.bias_weights = None
         self.values = None
-        self.pruning_threshold = pruning_threshold
         self.strides = strides
         self.padding = padding
+        
         self.prune_mask = None
-        self.num_clusters = num_clusters
+
         self.centroids = []
         self.name = name
+        
         self.pruned_weights = tf.placeholder(tf.float32, self.weights.get_shape().as_list())
         self.assign_op = tf.assign(self.weights, self.pruned_weights)
-        self.cast_weights = True
-        self.cast_op = tf.cast(self.weights, tf.float16)
 
         self.clusters_ph = tf.placeholder(tf.float32, self.weights.get_shape().as_list())
         self.assign_clusters_op = tf.assign(self.weights, self.clusters_ph)

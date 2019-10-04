@@ -10,9 +10,7 @@ class dense(layer_base):
                  input_shape,
                  out_depth,
                  name=None,
-                 reuse=None,
-                 num_clusters=64,
-                 pruning_threshold=-0.05):
+                 reuse=None):
         self.name = name
         self.kernel_size = [input_shape[1], out_depth]
         self.weights = tf.get_variable(name=self.name+'/weights',
@@ -22,8 +20,6 @@ class dense(layer_base):
         self.bias_weights = None
         self.values = None
         self.prune_mask = None
-        self.pruning_threshold = pruning_threshold
-        self.num_clusters = num_clusters
         self.centroids = []
         
         self.pruned_weights = tf.placeholder(tf.float32, self.weights.get_shape().as_list())

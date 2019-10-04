@@ -42,9 +42,5 @@ class CNN():
     def train(self, images):
         return self.forward_pass(images)
 
-    def layers_as_list(self):
-        return [self.c1, self.c2, self.fc3, self.logits]
-    
-    def weights_as_list(self):
-        return [self.c1.weights, self.c2.weights, 
-            self.fc3.weights]
+    def layers_to_compress(self):
+        return [self.c1, self.c2, self.fc3]
