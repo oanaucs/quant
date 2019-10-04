@@ -15,14 +15,15 @@ class layer_base(ABC):
                  padding='SAME',
                  name=None,
                  reuse=None,
-                 num_clusters=8,
-                 pruning_threshold=0.0015):
+                 num_clusters=64,
+                 pruning_threshold=-0.05):
         self.name = name
         self.kernel_size = [kernel_size[0],
                             kernel_size[1], in_depth, out_depth]
-        self.weights = tf.Variable(tf.random_normal(
-            shape=self.kernel_size, stddev=0.1), 
-            name=self.name+'/weights', trainable=True)
+        self.weights = tf.get_variable(name=self.name+'/weights',
+            shape=self.kernel_size, dtype=tf.float32,
+            initializer=tf.contrib.layers.xavier_initializer(),
+            trainable=True)
         self.bias_weights = None
         self.values = None
         self.prune_mask = None
@@ -31,9 +32,14 @@ class layer_base(ABC):
         self.padding = padding
         self.num_clusters = num_clusters
         self.centroids = []
+
         self.pruned_weights = tf.placeholder(
             tf.float32, self.weights.get_shape().as_list())
         self.assign_op = tf.assign(self.weights, self.pruned_weights)
+
+        self.clusters_ph = tf.placeholder(tf.float32, self.weights.get_shape().as_list())
+        self.assign_clusters_op = tf.assign(self.weights, self.clusters_ph)
+        self.cast_op = tf.cast(self.weights, tf.int32)
 
     def assign_weights(self, init_weights):
         self.weights = tf.Variable(init_weights, dtype=tf.float32,
@@ -63,41 +69,57 @@ class layer_base(ABC):
 
     def quantize_weights(self, session):
         weight_values = session.run(self.weights)
+
         # assign to clusters
-        self.centroids = np.linspace(start=np.min(weight_values), stop=np.max(
-            weight_values), num=self.num_clusters)
+        self.centroids = np.linspace(
+            start=np.min(weight_values), 
+            stop=np.max(weight_values), 
+                num=self.num_clusters)
 
-        self.previous_centroids = np.copy(self.centroids)
-        clustered_weights = np.digitize(
+        self.weight_clusters = np.digitize(
             weight_values.flatten(), self.centroids)
+        self.weight_clusters -= 1
 
-        quantized_values = [self.centroids[i-1] for i in clustered_weights]
-        quantized_values = np.reshape(
-            quantized_values, self.kernel_size)
+        quantized_weight_values = [self.centroids[i] for i in self.weight_clusters]
+        
+        self.weight_clusters = np.reshape(
+            self.weight_clusters, self.kernel_size)
+        quantized_weight_values = np.reshape(
+            quantized_weight_values, self.kernel_size)
+        
+        session.run(self.assign_clusters_op, feed_dict={
+                    self.clusters_ph: quantized_weight_values})
 
-        # recompute centroids
+        self.recompute_centroids(weight_values)
+
+
+    def recompute_centroids(self, weight_values):
         for i in range(0, len(self.centroids)):
-            centroid_mask = np.copy(quantized_values)
-            centroid_mask[centroid_mask != self.centroids[i]] = 0
-            centroid_mask[centroid_mask == self.centroids[i]] = 1
-            centroid_count = np.count_nonzero(centroid_mask)
+            weights_mask = np.zeros(self.weight_clusters.shape)
+            weights_mask[self.weight_clusters == i] = 1
 
-            if (centroid_count != 0):
-                self.centroids[i] = np.sum(
-                    weight_values * centroid_mask) / centroid_count
-        session.run(self.assign_op, feed_dict={
-                    self.pruned_weights: quantized_values})
+            count = np.count_nonzero(weights_mask)
+
+            if (count != 0):
+                weights_centroid_sum = np.sum(
+                    weight_values * weights_mask)
+                self.centroids[i] = weights_centroid_sum / count
 
     def quantize_gradients(self, gradient_values):
-        clustered_gradients = np.digitize(
-            gradient_values.flatten(), self.centroids)
-        clustered_gradients = np.reshape(clustered_gradients, self.kernel_size)
-
         gradients = np.zeros(gradient_values.shape)
+
         for i in range(0, len(self.centroids)):
-            centroid_mask = np.copy(clustered_gradients)
-            centroid_mask[centroid_mask != self.centroids[i]] = 0
-            centroid_mask[centroid_mask == self.centroids[i]] = 1
-            gradient_sum = np.sum(gradient_values * centroid_mask)
-            gradients += centroid_mask * gradient_sum
+            weights_mask = np.zeros(self.weight_clusters.shape)
+            weights_mask[self.weight_clusters == i] = 1            
+            gradient_sum = np.sum(gradient_values * weights_mask)
+            gradients += weights_mask * gradient_sum
         return gradients
+
+    def assign_clusters(self, session):
+        session.run(self.assign_clusters_op, feed_dict={self.clusters_ph: self.weight_clusters})
+        session.run(self.cast_op)
+
+        session.run(self.assign_bias_clusters_op, feed_dict={self.bias_clusters_ph: self.bias_clusters})
+        session.run(self.cast_bias_op)
+
+        return self.centroids

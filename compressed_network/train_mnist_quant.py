@@ -106,32 +106,11 @@ FLAGS = tf.app.flags.FLAGS
 lr = 0.001
 
 
-def apply_gradients(eval_grad_list, var_list, lr):
-    
+def apply_gradients(eval_grad_list, var_list, lr): 
     gradients_op_list = []
     gradients_mask_list = []
 
     for i in range(len(var_list)):
-    #     if masks is not None:
-    #         if masks[i] is not None:
-    #             gradients_mask = eval_grad_list[i] * lr * masks[i]
-    #             gradients_mask_list.append(gradients_mask)
-    #             new_var = tf.subtract(var_list[i], gradients_mask)
-        # elif centroids is not None:
-        #     pass
-        #     # if centroids[i] is not None:
-            #     gradient_value = session.run(gradients_list[i])
-            #     clustered_gradient = np.digitize(gradient_value.flatten(), centroids[i])
-            #     clustered_gradients = np.reshape(clustered_gradients, gradients_list[i].shape)
-            #     gradient = np.zeros(gradient_values.shape)
-            #     for i in range(0, len(centroids[i])):
-            #         centroid_mask = np.copy(clustered_gradients)
-            #         centroid_mask[centroid_mask != self.centroids[i]] = 0
-            #         centroid_mask[centroid_mask == self.centroids[i]] = 1
-            #         gradient_sum = np.sum(gradient_values * centroid_mask)
-            #         gradient += centroid_mask * gradient_sum
-            #     new_var = tf.subtract(var_list[i], gradient)
-        # else:
         new_var = tf.subtract(var_list[i], eval_grad_list[i] * lr)
 
         gradients_op = var_list[i].assign(new_var)
@@ -229,87 +208,111 @@ def main():
             layers_to_compress_names.append(layer.name)
 
         saver = tf.train.Saver()
+        last_ckpt = tf.train.latest_checkpoint(FLAGS.checkpoint_dir)
 
-        # with tf.train.MonitoredTrainingSession(checkpoint_dir=FLAGS.checkpoint_dir,
-        #                                        config=config,
-        #                                        save_summaries_steps=10) as mon_sess:
+        print('last checkpoint', last_ckpt)
+
         with tf.Session() as mon_sess:
             mon_sess.run(tf.global_variables_initializer())
             mon_sess.run(tf.local_variables_initializer())
 
+            if last_ckpt is not None:
+                saver.restore(mon_sess, last_ckpt)
 
-            for i in range(0, 10):
-                for j in range(0, 10):
-                    eval_grad = mon_sess.run(gradients_list)
-                    train_step, _ = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=0.03)
+            # for epoch in range(0, 10):
+            #     for step in range(0, 10):
+            #         # run gradients
+            #         eval_grad = mon_sess.run(gradients_list)
+            #         # compute learning rate
+            #         current_lr = FLAGS.learning_rate*0.9**(num_epoch/50)
+            #         train_step, _ = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=current_lr)
 
-                    _, loss = mon_sess.run([train_step, total_loss])
+            #         _, loss = mon_sess.run([train_step, total_loss])
 
-                    print('loss', loss)
-                    print(' ')
-                    print('accuracy', mon_sess.run([acc_op, acc_update_op]))
-                    print(' ')
+            #         print('loss', loss)
+            #         print(' ')
+            #         print('accuracy', mon_sess.run([acc_op, acc_update_op]))
+            #         print(' ')
 
-            saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'init_model.ckpt'))
+            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'init_model.ckpt'))
 
-        #     saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
-        #     # # # ###########
-        #     # # # PRUNE #
-        #     for i in range(0, 2):
-        #         for layer in layers_to_compress:
-        #             layer.prune_weights(mon_sess)
-
-        #         last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-        #         print('last c1 values', last_c1_values)
-
-
-        #         saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
-
-        #         saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
-
-        #         new_values = mon_sess.run(layers_to_compress[0].weights)
-        #         # print('new_values', new_values)
-
-        #         gradients_list_op, gradients_masks_list = gradients_cal(var_list=variables_to_train, loss=total_loss, lr=0.03, net= quant_net)
-        #         print(gradients_list_op)
-
-        #         _, prune_loss = mon_sess.run([train_step, total_loss])
-        #         print('last prune loss', prune_loss)
-        #         # print('accuracy', mon_sess.run(streaming_accuracy))
-
-
-        #         last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-        #         print('last c1 values', last_c1_values)
+            # saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
             
+            # # # ###########
+            # # # PRUNE #
+            # for i in range(0, 2):
+            #     for layer in layers_to_compress:
+            #         layer.prune_weights(mon_sess)
+
+            #     # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+            #     # print('last c1 values', last_c1_values)
+
+            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
+
+            #     saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
+
+            #     new_values = mon_sess.run(layers_to_compress[0].weights)
+
+            #     # retrain
+            #     for step in range(0, 1):
+            #         eval_grad = mon_sess.run(gradients_list)
+            #         print(gradients_list)
+            #         # prune gradients
+            #         eval_grad[0] = quant_net.c1.prune_gradients(eval_grad[0])
+            #         eval_grad[1] = quant_net.c2.prune_gradients(eval_grad[1])
+            #         eval_grad[2] = quant_net.fc3.prune_gradients(eval_grad[2])
+
+            #         train_step, _ = apply_gradients(eval_grad, variables_to_train, 0.0003)
+            #         # print(gradients_list_op)
+
+            #         _, prune_loss = mon_sess.run([train_step, total_loss])
+            #         print('last prune loss', prune_loss)
+            #         print('accuracy', mon_sess.run([acc_op, acc_update_op]))
+
+
+            #         # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+            #         # print('last c1 values', last_c1_values)
+            
+            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
+
+            #     saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
 
                 
             # # ############
             # # # QUANTIZE #
-            # for i in range(0, 1000):
-            #     for layer in layers:
-            #         layer.quantize_weights(mon_sess)
+            for i in range(0, 1):
+                for layer in layers_to_compress:
+                    layer.quantize_weights(mon_sess)
 
-            #     # retrain
-            #     eval_images = mon_sess.run(images)
-            #     eval_labels = mon_sess.run(labels)
+                # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+                # print('last c1 values', last_c1_values)
 
-            #     gradient_values, quantization_loss = mon_sess.run(
-            #         [gradients, total_loss], feed_dict={images_var: eval_images, labels: eval_labels})
+                saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
 
-            #     # print('quantization loss', quantization_loss)
-            #     # print('c1 values')
-            #     # c1_values = mon_sess.run(layers[0].weights)
-            #     # print(c1_values)
+                saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
 
-            #     # print('difference')
-            #     # print(last_c1_values - c1_values)
+                # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+                # print('last c1 values', last_c1_values)
 
-            #     quantized_gradients = {}
-            #     for i in range(len(gradients)):
-            #         quantized_gradients[gradients[i]] = layers[i].quantize_gradients(
-            #             gradient_values[i])
+                for step in range(0, 10):
+                    eval_grad = mon_sess.run(gradients_list)
+                    # print(gradients_list)
+                    # prune gradients
+                    eval_grad[0] = quant_net.c1.quantize_gradients(eval_grad[0])
+                    eval_grad[1] = quant_net.c2.quantize_gradients(eval_grad[1])
+                    eval_grad[2] = quant_net.fc3.quantize_gradients(eval_grad[2])
 
-            #     mon_sess.run(train_step, feed_dict=quantized_gradients)
+
+                    train_step, _ = apply_gradients(eval_grad, variables_to_train, 0.000003)
+
+                    _, quant_loss = mon_sess.run([train_step, total_loss])
+                    print('last quant loss', quant_loss)
+                    print('accuracy', mon_sess.run([acc_op, acc_update_op]))
+            
+                saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
+
+                saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
+
 
 
 if __name__ == '__main__':

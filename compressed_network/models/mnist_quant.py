@@ -47,4 +47,4 @@ class CNN():
     
     def weights_as_list(self):
         return [self.c1.weights, self.c2.weights, 
-            self.fc3.weights, self.logits.weights]
+            self.fc3.weights]

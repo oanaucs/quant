@@ -14,8 +14,8 @@ class conv2d(layer_base):
                  padding='SAME',
                  name=None,
                  reuse=None,
-                 num_clusters=8,
-                 pruning_threshold=0.0015):
+                 num_clusters=64,
+                 pruning_threshold=-0.05):
         self.name = name
         self.kernel_size = [kernel_size[0],
                             kernel_size[1], in_depth, out_depth]
@@ -39,6 +39,10 @@ class conv2d(layer_base):
         self.assign_op = tf.assign(self.weights, self.pruned_weights)
         self.cast_weights = True
         self.cast_op = tf.cast(self.weights, tf.float16)
+
+        self.clusters_ph = tf.placeholder(tf.float32, self.weights.get_shape().as_list())
+        self.assign_clusters_op = tf.assign(self.weights, self.clusters_ph)
+        self.cast_op = tf.cast(self.weights, tf.int32)
 
     def forward(self, input_tensor):
         self.values = tf.nn.conv2d(
