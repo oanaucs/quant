@@ -48,7 +48,7 @@ tf.app.flags.DEFINE_integer(
     'batch_size', 128, 'The number of samples in each batch.')
     
 tf.app.flags.DEFINE_integer(
-    'num_epochs', 1,
+    'num_epochs', 10000,
     'Maximum number of epochs.')
 
 tf.app.flags.DEFINE_float(
@@ -74,7 +74,7 @@ tf.app.flags.DEFINE_string(
     'Specifies how the learning rate is decayed. One of "fixed", "exponential",'
     ' or "polynomial"')
 
-tf.app.flags.DEFINE_float('learning_rate', 0.003, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 0.0003, 'Initial learning rate.')
 
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.0003,
@@ -87,7 +87,7 @@ tf.app.flags.DEFINE_float(
     'learning_rate_decay_factor', 0.94, 'Learning rate decay factor.')
 
 tf.app.flags.DEFINE_float(
-    'num_epochs_per_decay', 1,
+    'num_epochs_per_decay', 10000,
     'Number of epochs after which learning rate decays.')
 
 tf.app.flags.DEFINE_float(
@@ -100,11 +100,11 @@ tf.app.flags.DEFINE_float(
 #################
 
 tf.app.flags.DEFINE_integer(
-    'num_pruning_steps', 10,
+    'num_pruning_steps', 20,
     'Number of pruning steps.')
 
 tf.app.flags.DEFINE_integer(
-    'num_pruning_retrain_steps', 10,
+    'num_pruning_retrain_steps', 50,
     'Number of retrain steps after_pruning.')
 
 tf.app.flags.DEFINE_integer(
@@ -112,11 +112,11 @@ tf.app.flags.DEFINE_integer(
     'Pruning threshold. If set to None, adaptive sparsity level will be used.')
 
 tf.app.flags.DEFINE_float(
-    'init_sparsity_level', 0.2,
+    'init_sparsity_level', 0.008,
     'Initial sparsity level.')
 
 tf.app.flags.DEFINE_float(
-    'max_sparsity_level', 0.3,
+    'max_sparsity_level', 0.2,
     'Maximum sparsity level. Depending on the number of steps can be achieved or not')
 
 tf.app.flags.DEFINE_float(
@@ -173,6 +173,7 @@ def apply_gradients(eval_grad_list, var_list, lr):
 
 def main():
     tf.logging.set_verbosity(tf.logging.INFO)
+    tf.reset_default_graph()
     g = tf.Graph()
     with g.as_default():
         config = tf.ConfigProto()
@@ -181,6 +182,8 @@ def main():
         # Create global_step
         global_step = tf.train.create_global_step()
         global_step_count = 0
+        global_step_ph = tf.placeholder(tf.int64)
+        global_step_assign_op = global_step.assign(global_step_ph)
         # create summary writer
         summary_writer = tf.contrib.summary.create_file_writer(FLAGS.checkpoint_dir, flush_millis=10000)
 
@@ -269,9 +272,12 @@ def main():
         variable_scope.get_variable_scope().reuse_variables()
         variables_to_train = tf.trainable_variables()
 
-        updated_weights_placeholders = [tf.placeholder(tf.float32, shape=v.shape) for v in variables_to_train]
-        print('weights placeholders', updated_weights_placeholders)
-        assign_updated_weights_ops = [v.assign(p) for (v, p) in zip(variables_to_train, updated_weights_placeholders)]
+        # updated_weights_placeholders = [tf.placeholder(tf.float32, shape=v.shape) for v in variables_to_train]
+        # print('weights placeholders', updated_weights_placeholders)
+        # assign_updated_weights_ops = [v.assign(p) for (v, p) in zip(variables_to_train, updated_weights_placeholders)]
+
+        grads_placeholders = [tf.placeholder(tf.float32, shape=v.shape) for v in variables_to_train]
+        compute_weight_updates_op = [variables_to_train[i].assign(tf.subtract(variables_to_train[i], grads_placeholders[i])) for i in range(0, len(variables_to_train))]
         
         # gradient computation op
         gradients_list = tf.gradients(xs=variables_to_train, ys=total_loss)
@@ -287,11 +293,13 @@ def main():
             mon_sess.run(tf.global_variables_initializer())
             mon_sess.run(tf.local_variables_initializer())
 
+            mon_sess.graph.finalize()
+
             if last_ckpt is not None:
                 saver.restore(mon_sess, last_ckpt)
                 # get global step
                 global_step_count = int(last_ckpt.split('-')[-1])
-                mon_sess.run(global_step.assign(global_step_count))
+                mon_sess.run(global_step_assign_op, feed_dict={global_step_ph: global_step_count})
 
             ####################
             # INITIAL TRAINING #
@@ -327,15 +335,16 @@ def main():
             #########
             # PRUNE #
             #########
+            current_sparsity_level = FLAGS.init_sparsity_level
             for prune_step in range(0, FLAGS.num_pruning_steps):
                 # restore saved model
                 saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
                 # compute current threshold or sparsity level
-                current_sparsity_level = FLAGS.init_sparsity_level
                 if FLAGS.pruning_threshold is None:
                     if (prune_step > 0):
                         current_sparsity_level = increase_sparsity_level(current_sparsity_level, FLAGS.max_sparsity_level, FLAGS.sparsity_increase_step)
-                
+                print('current sparsity level', current_sparsity_level)
+
                 # quantize layers
                 for layer in layers_to_compress:
                     layer.prune_weights(mon_sess, FLAGS.pruning_threshold, current_sparsity_level)
@@ -360,29 +369,31 @@ def main():
                     eval_grad[2] = net.fc3.prune_gradients(eval_grad[2])
 
                     # update weights
-                    updated_weights = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
+                    # updated_weights = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
                     # update global_step
-                    global_step_count += 1
-                    mon_sess.run(global_step.assign(global_step_count))
 
                     # assign weights
                     for i in range(0, len(variables_to_train)):
-                        mon_sess.run(assign_updated_weights_ops[i], feed_dict={updated_weights_placeholders[i]: mon_sess.run(updated_weights[i])})
-                    
+                        mon_sess.run(compute_weight_updates_op[i], feed_dict={grads_placeholders[i]: eval_grad[i] * mon_sess.run(learning_rate)})
+                        # mon_sess.run(assign_updated_weights_ops[i], feed_dict={updated_weights_placeholders[i]: mon_sess.run(updated_weights[i])})
+                        
+                    global_step_count += 1
+                    mon_sess.run(global_step_assign_op, feed_dict={global_step_ph: global_step_count})
+
                     # compute loss
                     prune_loss, summary = mon_sess.run([total_loss, merged_summary_op])
                     accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
                     print('prune loss', prune_loss, 'accuracy', accuracy)
 
-                    last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-                    print('last c1 values', last_c1_values)
+                    # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+                    # print('last c1 values', last_c1_values)
 
-                    # save pruned model
-                    if (prune_step % 50 == 0):
-                        writer.add_summary(summary, mon_sess.run(global_step))
-                        saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(current_sparsity_level) + '_pruned_model.ckpt-' + str(mon_sess.run(global_step))))
-                    
+                # save pruned model
+                # if (prune_step % 2 == 0):
+                writer.add_summary(summary, mon_sess.run(global_step))
+                saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(current_sparsity_level) + '_pruned_model.ckpt-' + str(mon_sess.run(global_step))))
+                
             ############
             # QUANTIZE #
             ############
