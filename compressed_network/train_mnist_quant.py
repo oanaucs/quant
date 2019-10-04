@@ -22,13 +22,13 @@ from preprocessing import preprocessing_factory
 #################
 
 tf.app.flags.DEFINE_string(
-    'dataset_name', 'fashion_mnist', 'The name of the dataset to load.')
+    'dataset_name', 'mnist', 'The name of the dataset to load.')
 
 tf.app.flags.DEFINE_string(
     'dataset_split_name', 'train', 'The name of the train/test split.')
 
 tf.app.flags.DEFINE_string(
-    'dataset_dir', './../../tmp/mnist_fashion', 'The directory where the dataset files are stored.')
+    'dataset_dir', './../../tmp/mnist', 'The directory where the dataset files are stored.')
 
 tf.app.flags.DEFINE_string(
     'preprocessing_name', None, 'The name of the preprocessing to use. If left '
@@ -198,9 +198,9 @@ def main():
         # Select the dataset #
         ######################
         dataset, num_classes, num_samples = get_dataset(
-            'mnist',
-            'train',
-            './../tmp/mnist')
+            FLAGS.dataset_name,
+            FLAGS.dataset_split_name,
+            FLAGS.dataset_dir)
 
         print('dataset num classes', num_classes, num_samples)
 
@@ -238,7 +238,11 @@ def main():
         # create loss
         loss_op = tf.reduce_mean(tf.losses.softmax_cross_entropy(
             onehot_labels=onehot_labels, logits=logits, label_smoothing=FLAGS.label_smoothing, weights=1.0))
-        total_loss = tf.losses.get_total_loss()
+
+        # add L1 regularization for initial training to enforce sparsity already
+        l2_regularization = tf.contrib.layers.l2_regularizer(scale=0.005, scope='l2_regularization')
+        regularization_penalty = tf.contrib.layers.apply_regularization(l2_regularization, [net.c1.weights, net.c2.weights, net.fc3.weights])
+        total_loss = loss_op + regularization_penalty
 
         summaries.add(tf.summary.scalar('loss/%s' %
                                         total_loss.op.name, total_loss))
