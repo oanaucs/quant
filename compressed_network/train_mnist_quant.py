@@ -372,47 +372,47 @@ def main():
             ############
             # QUANTIZE #
             ############
-            for quant_step in range(0, FLAGS.num_quant_steps):
-                # restore model model
-                saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+            # for quant_step in range(0, FLAGS.num_quant_steps):
+            #     # restore model model
+            #     saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
                 
-                for layer in layers_to_compress:
-                    layer.quantize_weights(mon_sess, FLAGS.num_quant_clusters)
+            #     for layer in layers_to_compress:
+            #         layer.quantize_weights(mon_sess, FLAGS.num_quant_clusters)
 
-                # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-                # print('last c1 values', last_c1_values)
+            #     # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+            #     # print('last c1 values', last_c1_values)
 
-                # save weights
-                saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
-                # restore for retraining
-                saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
+            #     # save weights
+            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
+            #     # restore for retraining
+            #     saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'quant_model.ckpt'))
 
-                # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-                # print('last c1 values', last_c1_values)
+            #     # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+            #     # print('last c1 values', last_c1_values)
 
-                for step in range(0, FLAGS.num_quant_retrain_steps):
-                    # get gradients
-                    eval_grad = mon_sess.run(gradients_list)
-                    # quantize gradients
-                    eval_grad[0] = net.c1.quantize_gradients(eval_grad[0])
-                    eval_grad[1] = net.c2.quantize_gradients(eval_grad[1])
-                    eval_grad[2] = net.fc3.quantize_gradients(eval_grad[2])
+            #     for step in range(0, FLAGS.num_quant_retrain_steps):
+            #         # get gradients
+            #         eval_grad = mon_sess.run(gradients_list)
+            #         # quantize gradients
+            #         eval_grad[0] = net.c1.quantize_gradients(eval_grad[0])
+            #         eval_grad[1] = net.c2.quantize_gradients(eval_grad[1])
+            #         eval_grad[2] = net.fc3.quantize_gradients(eval_grad[2])
 
-                    # update weights
-                    train_step = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
-                    # update global_step
-                    global_step_count += 1
-                    mon_sess.run(global_step.assign(global_step_count))
+            #         # update weights
+            #         train_step = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
+            #         # update global_step
+            #         global_step_count += 1
+            #         mon_sess.run(global_step.assign(global_step_count))
 
-                    # compute loss and accuracy
-                    _, quant_loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
-                    accuracy, _ = mon_sess.run([acc_op, acc_update_op])
+            #         # compute loss and accuracy
+            #         _, quant_loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
+            #         accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
-                    print('quant loss', quant_loss, 'accuracy', accuracy)
+            #         print('quant loss', quant_loss, 'accuracy', accuracy)
                 
-                if (quant_step % 10 == 0):
-                    writer.add_summary(summary, mon_sess.run(global_step))
-                    saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(quant_step) + '_quant_model.ckpt-' + str(mon_sess.run(global_step))))
+            #     if (quant_step % 10 == 0):
+            #         writer.add_summary(summary, mon_sess.run(global_step))
+            #         saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(quant_step) + '_quant_model.ckpt-' + str(mon_sess.run(global_step))))
 
 
 if __name__ == '__main__':
