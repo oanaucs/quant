@@ -265,13 +265,14 @@ def main():
         #######################
         # Define backprop ops #
         #######################
+        # allow variable reuse
+        variable_scope.get_variable_scope().reuse_variables()
         variables_to_train = tf.trainable_variables()
+
         updated_weights_placeholders = [tf.placeholder(tf.float32, shape=v.shape) for v in variables_to_train]
         print('weights placeholders', updated_weights_placeholders)
         assign_updated_weights_ops = [v.assign(p) for (v, p) in zip(variables_to_train, updated_weights_placeholders)]
-
-        # allow variable reuse
-        variable_scope.get_variable_scope().reuse_variables()
+        
         # gradient computation op
         gradients_list = tf.gradients(xs=variables_to_train, ys=total_loss)
 
@@ -337,7 +338,7 @@ def main():
                 
                 # quantize layers
                 for layer in layers_to_compress:
-                    layer.prune_weights(mon_sess, FLAGS.pruning_threshold, 0.99)
+                    layer.prune_weights(mon_sess, FLAGS.pruning_threshold, current_sparsity_level)
 
                 # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
                 # print('last c1 values', last_c1_values)
