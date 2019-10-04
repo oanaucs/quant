@@ -28,7 +28,7 @@ tf.app.flags.DEFINE_string(
     'dataset_split_name', 'train', 'The name of the train/test split.')
 
 tf.app.flags.DEFINE_string(
-    'dataset_dir', './../../tmp/mnist', 'The directory where the dataset files are stored.')
+    'dataset_dir', './../tmp/mnist', 'The directory where the dataset files are stored.')
 
 tf.app.flags.DEFINE_string(
     'preprocessing_name', None, 'The name of the preprocessing to use. If left '
@@ -163,15 +163,12 @@ def configure_learning_rate(num_samples_per_epoch, global_step):
 
 
 def apply_gradients(eval_grad_list, var_list, lr): 
-    gradients_op_list = []
+    updated_weights = []
 
     for i in range(len(var_list)):
-        updated_weights = tf.subtract(var_list[i], eval_grad_list[i] * lr)
+        updated_weights.append(tf.subtract(var_list[i], eval_grad_list[i] * lr))
 
-        gradients_op = var_list[i].assign(updated_weights)
-        gradients_op_list.append(gradients_op)
-    
-    return gradients_op_list
+    return updated_weights
 
 
 def main():
@@ -269,6 +266,10 @@ def main():
         # Define backprop ops #
         #######################
         variables_to_train = tf.trainable_variables()
+        updated_weights_placeholders = [tf.placeholder(tf.float32, shape=v.shape) for v in variables_to_train]
+        print('weights placeholders', updated_weights_placeholders)
+        assign_updated_weights_ops = [v.assign(p) for (v, p) in zip(variables_to_train, updated_weights_placeholders)]
+
         # allow variable reuse
         variable_scope.get_variable_scope().reuse_variables()
         # gradient computation op
@@ -300,12 +301,16 @@ def main():
             #         # run gradients
             #         eval_grad = mon_sess.run(gradients_list)
             #         # update weights
-            #         train_step = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=mon_sess.run(learning_rate))
+            #         updated_weights = apply_gradients(eval_grad_list=eval_grad, var_list=variables_to_train, lr=mon_sess.run(learning_rate))
             #         # update global_step
             #         global_step_count += 1
             #         mon_sess.run(global_step.assign(global_step_count))
+
+            #         # assign weights
+            #         for i in range(0, len(variables_to_train)):
+            #             mon_sess.run(assign_updated_weights_ops[i], feed_dict={updated_weights_placeholders[i]: mon_sess.run(updated_weights[i])})
             #         # compute loss and accuracy
-            #         _, loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
+            #         loss, summary = mon_sess.run([total_loss, merged_summary_op])
             #         accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
             #         print('training loss', loss, 'accuracy', accuracy)
@@ -321,57 +326,61 @@ def main():
             #########
             # PRUNE #
             #########
-            # for prune_step in range(0, FLAGS.num_pruning_steps):
-            #     # restore saved model
-            #     saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
-            #     # compute current threshold or sparsity level
-            #     current_sparsity_level = FLAGS.init_sparsity_level
-            #     if FLAGS.pruning_threshold is None:
-            #         if (prune_step > 0):
-            #             current_sparsity_level = increase_sparsity_level(current_sparsity_level, FLAGS.max_sparsity_level, FLAGS.sparsity_increase_step)
+            for prune_step in range(0, FLAGS.num_pruning_steps):
+                # restore saved model
+                saver.restore(mon_sess, tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+                # compute current threshold or sparsity level
+                current_sparsity_level = FLAGS.init_sparsity_level
+                if FLAGS.pruning_threshold is None:
+                    if (prune_step > 0):
+                        current_sparsity_level = increase_sparsity_level(current_sparsity_level, FLAGS.max_sparsity_level, FLAGS.sparsity_increase_step)
                 
-            #     # quantize layers
-            #     for layer in layers_to_compress:
-            #         layer.prune_weights(mon_sess, FLAGS.pruning_threshold, current_sparsity_level)
+                # quantize layers
+                for layer in layers_to_compress:
+                    layer.prune_weights(mon_sess, FLAGS.pruning_threshold, 0.99)
 
-            #     # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-            #     # print('last c1 values', last_c1_values)
+                # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+                # print('last c1 values', last_c1_values)
 
-            #     # save current weights
-            #     saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
-            #     # restore for retraining
-            #     saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
+                # save current weights
+                saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
+                # restore for retraining
+                saver.restore(mon_sess, os.path.join(FLAGS.checkpoint_dir, 'pruned_model.ckpt'))
 
-            #     # new_values = mon_sess.run(layers_to_compress[0].weights))
+                # new_values = mon_sess.run(layers_to_compress[0].weights))
 
-            #     # retrain
-            #     for step in range(0, FLAGS.num_pruning_retrain_steps):
-            #         # run gradients
-            #         eval_grad = mon_sess.run(gradients_list)
-            #         # prune gradients
-            #         eval_grad[0] = net.c1.prune_gradients(eval_grad[0])
-            #         eval_grad[1] = net.c2.prune_gradients(eval_grad[1])
-            #         eval_grad[2] = net.fc3.prune_gradients(eval_grad[2])
+                # retrain
+                for step in range(0, FLAGS.num_pruning_retrain_steps):
+                    # run gradients
+                    eval_grad = mon_sess.run(gradients_list)
+                    # prune gradients
+                    eval_grad[0] = net.c1.prune_gradients(eval_grad[0])
+                    eval_grad[1] = net.c2.prune_gradients(eval_grad[1])
+                    eval_grad[2] = net.fc3.prune_gradients(eval_grad[2])
 
-            #         # update weights
-            #         train_step = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
-            #         # update global_step
-            #         global_step_count += 1
-            #         mon_sess.run(global_step.assign(global_step_count))
+                    # update weights
+                    updated_weights = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
+                    # update global_step
+                    global_step_count += 1
+                    mon_sess.run(global_step.assign(global_step_count))
 
-            #         # compute loss
-            #         _, prune_loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
-            #         accuracy, _ = mon_sess.run([acc_op, acc_update_op])
+                    # assign weights
+                    for i in range(0, len(variables_to_train)):
+                        mon_sess.run(assign_updated_weights_ops[i], feed_dict={updated_weights_placeholders[i]: mon_sess.run(updated_weights[i])})
+                    
+                    # compute loss
+                    prune_loss, summary = mon_sess.run([total_loss, merged_summary_op])
+                    accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
-            #         print('prune loss', prune_loss, 'accuracy', accuracy)
+                    print('prune loss', prune_loss, 'accuracy', accuracy)
 
-            #         # last_c1_values = mon_sess.run(layers_to_compress[0].weights)
-            #         # print('last c1 values', last_c1_values)
+                    last_c1_values = mon_sess.run(layers_to_compress[0].weights)
+                    print('last c1 values', last_c1_values)
 
-            #         # save pruned model
-            #         if (prune_step % 50 == 0):
-            #             writer.add_summary(summary, mon_sess.run(global_step))
-            #             saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(current_sparsity_level) + '_pruned_model.ckpt-' + str(mon_sess.run(global_step))))
+                    # save pruned model
+                    if (prune_step % 50 == 0):
+                        writer.add_summary(summary, mon_sess.run(global_step))
+                        saver.save(mon_sess, os.path.join(FLAGS.checkpoint_dir, str(current_sparsity_level) + '_pruned_model.ckpt-' + str(mon_sess.run(global_step))))
                     
             ############
             # QUANTIZE #
@@ -403,13 +412,16 @@ def main():
             #         eval_grad[2] = net.fc3.quantize_gradients(eval_grad[2])
 
             #         # update weights
-            #         train_step = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
+            #         updated_weights = apply_gradients(eval_grad, variables_to_train, mon_sess.run(learning_rate))
             #         # update global_step
             #         global_step_count += 1
             #         mon_sess.run(global_step.assign(global_step_count))
 
+            #         for i in range(0, len(variables_to_train)):
+            #             mon_sess.run(assign_updated_weights_ops[i], feed_dict={updated_weights_placeholders[i]: mon_sess.run(updated_weights[i])})
+
             #         # compute loss and accuracy
-            #         _, quant_loss, summary = mon_sess.run([train_step, total_loss, merged_summary_op])
+            #         quant_loss, summary = mon_sess.run([total_loss, merged_summary_op])
             #         accuracy, _ = mon_sess.run([acc_op, acc_update_op])
 
             #         print('quant loss', quant_loss, 'accuracy', accuracy)
