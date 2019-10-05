@@ -53,9 +53,9 @@ class layer_base(ABC):
         return self.values
 
     def refine_threshold(self, weights, sparsity_level):
-        sorted_weights = np.sort(weights.flatten())
-        threshold_idx = int(sparsity_level * weights.size)
-        # print('size', sorted_weights.size, 'threshold idx', threshold_idx, 'value', sorted_weights[threshold_idx], 'min', np.min(weights))
+        sorted_weights = np.sort(np.abs(weights).flatten())
+        threshold_idx = int(sparsity_level * sorted_weights.size)
+        threshold = sorted_weights[threshold_idx]
         return sorted_weights[threshold_idx]
 
     def prune_weights(self, session, pruning_threshold=None, sparsity_level=0.0):
