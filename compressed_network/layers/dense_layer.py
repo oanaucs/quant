@@ -10,13 +10,15 @@ class dense(layer_base):
                  input_shape,
                  out_depth,
                  name=None,
-                 reuse=None):
+                 reuse=None,
+                 trainable=True):
         self.name = name
         self.kernel_size = [input_shape[1], out_depth]
+        self.trainable = trainable
         self.weights = tf.get_variable(name=self.name+'/weights',
             shape=self.kernel_size, dtype=tf.float32,
             initializer=tf.contrib.layers.xavier_initializer(),
-            trainable=True)
+            trainable=self.trainable)
         self.bias_weights = None
         self.values = None
         self.prune_mask = None
@@ -39,7 +41,7 @@ class dense(layer_base):
             self.bias_weights = tf.get_variable(name=self.name+'/biases',
                 shape=bias_shape, dtype=tf.float32, 
                 initializer=tf.zeros_initializer(),
-                trainable=True)
+                trainable=self.trainable)
 
         self.bias_values = tf.nn.bias_add(self.values, self.bias_weights)
         self.relu_values = tf.nn.relu(self.bias_values)

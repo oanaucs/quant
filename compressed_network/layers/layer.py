@@ -14,14 +14,16 @@ class layer_base(ABC):
                  init_bias_weights=None,
                  padding='SAME',
                  name=None,
-                 reuse=None):
+                 reuse=None,
+                 trainable=True):
         self.name = name
         self.kernel_size = [kernel_size[0],
                             kernel_size[1], in_depth, out_depth]
+        self.trainable = trainable
         self.weights = tf.get_variable(name=self.name+'/weights',
             shape=self.kernel_size, dtype=tf.float32,
             initializer=tf.contrib.layers.xavier_initializer(),
-            trainable=True)
+            trainable=self.trainable)
         self.bias_weights = None
         self.values = None
         self.prune_mask = None
@@ -39,13 +41,11 @@ class layer_base(ABC):
 
     def assign_weights(self, init_weights):
         self.weights = tf.Variable(init_weights, dtype=tf.float32,
-            name=self.name+'/weights', trainable=True)
+            name=self.name+'/weights', trainable=self.trainable)
 
     def assign_bias_weights(self, init_bias_weights):
         self.bias_weights = tf.Variable(init_bias_weights, dtype=tf.float32,
-            name=self.name+'/biases', trainable=True)
-        # print('assigned bias', self.name, self.bias_weights.shape)
-
+            name=self.name+'/biases', trainable=self.trainable)
 
     @abstractmethod
     def forward(self, input_tensor):
@@ -55,7 +55,7 @@ class layer_base(ABC):
     def refine_threshold(self, weights, sparsity_level):
         sorted_weights = np.sort(weights.flatten())
         threshold_idx = int(sparsity_level * weights.size)
-        print('size', sorted_weights.size, 'threshold idx', threshold_idx, 'value', sorted_weights[threshold_idx], 'min', np.min(weights))
+        # print('size', sorted_weights.size, 'threshold idx', threshold_idx, 'value', sorted_weights[threshold_idx], 'min', np.min(weights))
         return sorted_weights[threshold_idx]
 
     def prune_weights(self, session, pruning_threshold=None, sparsity_level=0.0):
@@ -65,8 +65,9 @@ class layer_base(ABC):
             pruning_threshold = self.refine_threshold(weight_values, sparsity_level)
 
         self.prune_mask = np.copy(weight_values)
-        self.prune_mask[self.prune_mask < pruning_threshold] = 0
-        self.prune_mask[self.prune_mask != 0] = 1
+        self.prune_mask[np.abs(self.prune_mask) > pruning_threshold] = 1
+        self.prune_mask[self.prune_mask != 1] = 0
+        print('set to 0', np.count_nonzero(self.prune_mask))
         # assign values
         session.run(self.assign_op, feed_dict={
                     self.pruned_weights: weight_values * self.prune_mask})
