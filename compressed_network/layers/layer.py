@@ -41,13 +41,15 @@ class layer_base(ABC):
         self.assign_clusters_op = tf.assign(self.weights, self.clusters_ph)
         self.cast_op = tf.cast(self.weights, tf.int32)
 
-    def assign_weights(self, init_weights):
-        self.weights = tf.Variable(init_weights, dtype=tf.float32,
-            name=self.name+'/weights', trainable=self.trainable)
+    def assign_weights(self, session, init_weights):
+        session.run(self.assign_op, feed_dict={
+                    self.pruned_weights: init_weights})
 
     def assign_bias_weights(self, init_bias_weights):
-        self.bias_weights = tf.Variable(init_bias_weights, dtype=tf.float32,
-            name=self.name+'/biases', trainable=self.trainable)
+        self.bias_weights = tf.get_variable(name=self.name+'/biases',
+                shape=init_bias_weights.shape, dtype=tf.float32, 
+                initializer=tf.constant_initializer(),
+                trainable=self.trainable)
 
     @abstractmethod
     def forward(self, input_tensor):
@@ -91,15 +93,15 @@ class layer_base(ABC):
         km = KMeans(n_clusters=num_clusters - 1, init=self.centroids.reshape(-1, 1), max_iter=10)
         km.fit(weight_values.flatten().reshape(-1, 1))
 
-        print('labels', km.labels_)
+        # print('labels', km.labels_)
 
         self.labels = km.labels_ + 1
         # set previous 0 weights to 0
         self.labels = self.labels * zero_mask.flatten()
-        print('new labels', self.labels)
+        # print('new labels', self.labels)
         self.centroids = km.cluster_centers_
         self.centroids = np.insert(self.centroids, 0, 0.0)
-        print('centroids', self.centroids)
+        # print('centroids', self.centroids)
 
         quantized_weight_values = [self.centroids[int(i)] for i in self.labels]
         quantized_weight_values = np.reshape(
