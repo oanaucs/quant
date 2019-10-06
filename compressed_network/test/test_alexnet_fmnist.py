@@ -18,6 +18,8 @@ from preprocessing import preprocessing_factory
 
 from models.alexnet import alexnet
 
+import time
+
 #################
 # Dataset Flags #
 #################
@@ -29,7 +31,7 @@ tf.app.flags.DEFINE_string(
     'dataset_split_name', 'test', 'The name of the train/test split.')
 
 tf.app.flags.DEFINE_string(
-    'dataset_dir', '.\\..\\..\\tmp\\fashion_mnist', 'The directory where the dataset files are stored.')
+    'dataset_dir', './../../tmp/fashion_mnist', 'The directory where the dataset files are stored.')
 
 tf.app.flags.DEFINE_string(
     'preprocessing_name', None, 'The name of the preprocessing to use. If left '
@@ -42,11 +44,11 @@ tf.app.flags.DEFINE_integer(
 # Test Flags #
 ##############
 
-tf.app.flags.DEFINE_string('checkpoint_path', '.\\..\\..\\trained_models\\alexnet_fmnist',
+tf.app.flags.DEFINE_string('checkpoint_path', '/media/oanaucs/Data/awp_trained_models/alexnet_fmnist_0.1/0.024_pruned_model.ckpt-3978',
                            'Directory for saving and restoring checkpoints.')
 
 tf.app.flags.DEFINE_integer(
-    'batch_size', 128, 'The number of samples in each batch.')
+    'batch_size', 100, 'The number of samples in each batch.')
 
 tf.app.flags.DEFINE_integer(
     'max_num_batches', None,
@@ -61,6 +63,20 @@ tf.app.flags.DEFINE_string(
 
 
 FLAGS = tf.app.flags.FLAGS
+
+def count_non_zero(ckpt_path):
+    reader = tf.train.NewCheckpointReader(ckpt_path)
+    param_map = reader.get_variable_to_shape_map()
+
+    non_zero_count = 0
+
+    for key in param_map:
+        if 'Adam' not in key:
+            print("tensor_name: ", key)
+            tensor = reader.get_tensor(key)
+            non_zero_count += np.count_nonzero(tensor)
+
+    print('non zero', non_zero_count)
 
 
 def main(_):
@@ -143,6 +159,8 @@ def main(_):
     ############
     # Evaluate #
     ###########
+    step_times = []
+
     with session.as_default():
         # init variables
         init = tf.group(tf.local_variables_initializer(), tf.global_variables_initializer())
@@ -153,7 +171,10 @@ def main(_):
         #run forward pass for eval steps
         try:
             for i in range(0, num_batches):
+                start = time.time()
                 preds = session.run(fetches=predictions, options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE), run_metadata=run_meta)
+                step_times.append(time.time() - start)
+                
                 # profiler.add_step(i, run_meta)
                 accuracy, _ = session.run([acc_op, acc_update_op])
                 print('step', i, 'accuracy', accuracy)
@@ -161,7 +182,18 @@ def main(_):
             pass
 
     # flops = tf.profiler.profile(tf.get_default_graph(), options=tf.profiler.ProfileOptionBuilder.float_operation())
+    # params = tf.profiler.profile(tf.get_default_graph(), options=tf.profiler.ProfileOptionBuilder.trainable_variables_parameter())
     # print('total flops', flops.total_float_ops)
+    # print('params', params)
+
+    count_non_zero(model_path)
+
+    print('avg step time', np.mean(step_times))
+
+
+    # print('avgquant', np.load('/media/oanaucs/Data/awp_trained_models/alexnet_quant/alexnet_quant256avg_quant_step.npy'))
+    # print('layer quant', np.load('/media/oanaucs/Data/awp_trained_models/alexnet_quant/alexnet_quant256quant_time.npy'))
+
 
 
 if __name__ == '__main__':

@@ -1,0 +1,16 @@
+threshold idx 1 value -0.62262803 min -0.62463355
+threshold idx 36 value -0.15387556 min -0.275601
+threshold idx 73 value -0.12693581 min -0.21998653
+threshold idx 147 value -0.09622612 min -0.18817616
+threshold idx 294 value -0.07774472 min -0.14611581
+threshold idx 589 value -0.06306481 min -0.12394116
+threshold idx 589 value -0.069805354 min -0.13099496
+threshold idx 1179 value -0.06247543 min -0.13596863
+threshold idx 2359 value -0.050169144 min -0.09061873
+threshold idx 2359 value -0.05683285 min -0.116352
+threshold idx 2359 value -0.057463184 min -0.11856827
+threshold idx 2359 value -0.05154012 min -0.09461566
+threshold idx 2359 value -0.05598577 min -0.1338144
+threshold idx 102760 value -0.011520846 min -0.069999106
+threshold idx 16777 value -0.030021295 min -0.05345044
+threshold idx 20 value -0.10210083 min -0.14898784
