@@ -48,7 +48,7 @@ class layer_base(ABC):
     def assign_bias_weights(self, init_bias_weights):
         self.bias_weights = tf.get_variable(name=self.name+'/biases',
                 shape=init_bias_weights.shape, dtype=tf.float32, 
-                initializer=tf.constant_initializer(),
+                initializer=tf.constant_initializer(init_bias_weights),
                 trainable=self.trainable)
 
     @abstractmethod
